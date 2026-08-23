@@ -324,11 +324,14 @@ const PROVIDER_MODELS_CONFIG = {
             }))
           };
         }
-        warning = "Kiro returned no models; falling back to static catalog.";
+        warning = "Kiro returned no models; the dashboard keeps its static catalog.";
       } catch (error) {
         warning = `Failed to fetch Kiro models: ${error.message}`;
-        console.log("Failed to fetch Kiro models dynamically, falling back to static:", error.message);
+        console.log("Failed to fetch Kiro models dynamically; returning no live models:", error.message);
       }
+      // An empty list is the "no live catalog" signal: callers keep whatever
+      // static catalog they already hold. This resolver never returns static
+      // models itself, so it must not claim to.
       return { models: [], warning };
     }
   },
