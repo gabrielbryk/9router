@@ -1,3 +1,4 @@
+import { validateCompatibleTransportPolicy } from "open-sse/config/compatibleTransport.js";
 import { NextResponse } from "next/server";
 import { createProviderNode, getProviderNodes } from "@/models";
 import { OPENAI_COMPATIBLE_PREFIX, ANTHROPIC_COMPATIBLE_PREFIX, CUSTOM_EMBEDDING_PREFIX } from "@/shared/constants/providers";
@@ -32,6 +33,12 @@ export async function GET() {
 export async function POST(request) {
   try {
     const body = await request.json();
+    let transportPolicy;
+    try {
+      if (Object.hasOwn(body, "transportPolicy")) transportPolicy = validateCompatibleTransportPolicy(body.transportPolicy);
+    } catch (error) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     const { name, prefix, apiType, baseUrl, type } = body;
 
     if (!name?.trim()) {
@@ -57,6 +64,7 @@ export async function POST(request) {
         apiType,
         baseUrl: (baseUrl || OPENAI_COMPATIBLE_DEFAULTS.baseUrl).trim(),
         name: name.trim(),
+        transportPolicy,
       });
       return NextResponse.json({ node }, { status: 201 });
     }
@@ -74,6 +82,7 @@ export async function POST(request) {
         prefix: prefix.trim(),
         baseUrl: sanitizedBaseUrl,
         name: name.trim(),
+        transportPolicy,
       });
       return NextResponse.json({ node }, { status: 201 });
     }
@@ -92,6 +101,7 @@ export async function POST(request) {
         prefix: prefix.trim(),
         baseUrl: sanitizedBaseUrl,
         name: name.trim(),
+        transportPolicy,
       });
       return NextResponse.json({ node }, { status: 201 });
     }

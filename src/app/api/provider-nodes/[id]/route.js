@@ -1,3 +1,4 @@
+import { validateCompatibleTransportPolicy } from "open-sse/config/compatibleTransport.js";
 import { NextResponse } from "next/server";
 import { deleteProviderConnectionsByProvider, deleteProviderNode, getProviderConnections, getProviderNodeById, updateProviderConnection, updateProviderNode } from "@/models";
 
@@ -6,6 +7,12 @@ export async function PUT(request, { params }) {
   try {
     const { id } = await params;
     const body = await request.json();
+    let transportPolicy;
+    try {
+      if (Object.hasOwn(body, "transportPolicy")) transportPolicy = validateCompatibleTransportPolicy(body.transportPolicy);
+    } catch (error) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     const { name, prefix, apiType, baseUrl } = body;
     const node = await getProviderNodeById(id);
 
@@ -54,6 +61,8 @@ export async function PUT(request, { params }) {
       baseUrl: sanitizedBaseUrl,
     };
 
+    if (transportPolicy !== undefined) updates.transportPolicy = transportPolicy;
+
     if (node.type === "openai-compatible") {
       updates.apiType = apiType;
     }
@@ -69,6 +78,7 @@ export async function PUT(request, { params }) {
           apiType: node.type === "openai-compatible" ? apiType : undefined,
           baseUrl: sanitizedBaseUrl,
           nodeName: updated.name,
+          transportPolicy: updated.transportPolicy ?? null,
         }
       })
     )));

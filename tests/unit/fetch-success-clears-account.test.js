@@ -121,4 +121,57 @@ describe("web fetch account state", () => {
       "webfetch:jina-reader",
     );
   });
+  it("returns typed empty extraction without cooling down or cycling credentials", async () => {
+    mocks.handleFetchCore.mockResolvedValue({ success: false, status: 502, code: "EMPTY_EXTRACTION", error: "No content" });
+    const response = await handleFetch(new Request("http://localhost/v1/web/fetch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "jina-reader", url: "https://example.com/article" }),
+    }));
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ error: { code: "EMPTY_EXTRACTION" } });
+    expect(mocks.getProviderCredentials).toHaveBeenCalledTimes(1);
+    expect(mocks.markAccountUnavailable).not.toHaveBeenCalled();
+    expect(mocks.clearAccountError).not.toHaveBeenCalled();
+  });
+
+  it("falls through empty extraction to another provider without credential cooldown", async () => {
+    mocks.getCombos.mockResolvedValue([{ name: "fetch-fallback", models: ["exa", "tavily"] }]);
+    mocks.handleFetchCore.mockResolvedValueOnce({ success: false, status: 502, code: "EMPTY_EXTRACTION", error: "No content" })
+      .mockResolvedValueOnce({ success: true, data: { provider: "tavily", content: { text: "article" } } });
+    const response = await handleFetch(new Request("http://localhost/v1/web/fetch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "fetch-fallback", url: "https://example.com/article" }),
+    }));
+    expect(response.status).toBe(200);
+    expect((await response.json()).content.text).toBe("article");
+    expect(mocks.handleFetchCore.mock.calls.map(([args]) => args.provider)).toEqual(["exa", "tavily"]);
+    expect(mocks.markAccountUnavailable).not.toHaveBeenCalled();
+  });
+
+  it("preserves the typed error when every combo provider has empty extraction", async () => {
+    mocks.getCombos.mockResolvedValue([{ name: "empty-fallback", models: ["exa", "tavily"] }]);
+    mocks.handleFetchCore.mockResolvedValue({ success: false, status: 502, code: "EMPTY_EXTRACTION", error: "No content" });
+    const response = await handleFetch(new Request("http://localhost/v1/web/fetch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "empty-fallback", url: "https://example.com/article" }),
+    }));
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ error: { code: "EMPTY_EXTRACTION" } });
+    expect(mocks.handleFetchCore).toHaveBeenCalledTimes(2);
+    expect(mocks.markAccountUnavailable).not.toHaveBeenCalled();
+  });
+
+  it("does not relabel a mixed combo failure as empty extraction", async () => {
+    mocks.getCombos.mockResolvedValue([{ name: "mixed-fallback", models: ["exa", "tavily"] }]);
+    mocks.handleFetchCore.mockResolvedValueOnce({ success: false, status: 502, code: "EMPTY_EXTRACTION", error: "No content" })
+      .mockRejectedValueOnce(new Error("transport failed"));
+    const response = await handleFetch(new Request("http://localhost/v1/web/fetch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "mixed-fallback", url: "https://example.com/article" }),
+    }));
+    const data = await response.json();
+    expect(data.error.code).not.toBe("EMPTY_EXTRACTION");
+    expect(data.error.message).toBe("transport failed");
+  });
+
 });
