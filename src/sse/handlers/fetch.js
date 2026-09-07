@@ -15,6 +15,13 @@ import { updateProviderCredentials, checkAndRefreshToken } from "../services/tok
 import { handleComboChat, getComboModelsFromData } from "open-sse/services/combo.js";
 import { assertPublicUrl } from "@/shared/utils/ssrfGuard.js";
 
+// Empty page extraction is a provider result, not an unhealthy credential.
+function emptyExtractionResponse(result) {
+  return Response.json({ error: { type: "server_error", code: "EMPTY_EXTRACTION", message: result.error } }, {
+    status: 502, headers: { "Access-Control-Allow-Origin": "*" },
+  });
+}
+
 /**
  * Handle web fetch (URL extraction) request for the SSE/Next.js server.
  * Provider IS the model. Mirrors handleEmbeddings auth + fallback flow.
@@ -95,15 +102,26 @@ export async function handleFetch(request) {
     const comboStrategy = comboStrategies[providerInput]?.fallbackStrategy || settings.comboStrategy || "fallback";
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
     log.info("FETCH", `Combo "${providerInput}" with ${comboModels.length} providers (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
-    return handleComboChat({
+    const attempts = [];
+    const response = await handleComboChat({
       body,
       models: comboModels,
-      handleSingleModel: (b, m) => handleSingleProviderFetch(b, m, request, apiKey, settings),
+      handleSingleModel: async (b, m) => {
+        const attemptIndex = attempts.push(undefined) - 1;
+        const response = await handleSingleProviderFetch(b, m, request, apiKey, settings);
+        const data = response.ok ? null : await response.clone().json().catch(() => null);
+        attempts[attemptIndex] = data?.error;
+        return response;
+      },
       log,
       comboName: providerInput,
       comboStrategy,
       comboStickyLimit
     });
+    if (!response.ok && attempts.length && attempts.every(error => error?.code === "EMPTY_EXTRACTION")) {
+      return emptyExtractionResponse({ error: "All fetch providers returned no usable extracted content" });
+    }
+    return response;
   }
 
   return handleSingleProviderFetch(body, providerInput, request, apiKey, settings);
@@ -150,6 +168,7 @@ async function handleSingleProviderFetch(body, providerInput, request, apiKey, s
         headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
       });
     }
+    if (result.code === "EMPTY_EXTRACTION") return emptyExtractionResponse(result);
     return errorResponse(result.status || HTTP_STATUS.BAD_GATEWAY, result.error || "Fetch failed");
   }
 
@@ -204,6 +223,8 @@ async function handleSingleProviderFetch(body, providerInput, request, apiKey, s
         headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
       });
     }
+
+    if (result.code === "EMPTY_EXTRACTION") return emptyExtractionResponse(result);
 
     const { shouldFallback } = await markAccountUnavailable(credentials.connectionId, result.status, result.error, providerId);
 

@@ -42,8 +42,12 @@ async function tryFetch(url, init, timeoutMs) {
   }
 }
 
+function extractionText(...values) {
+  return values.find(value => typeof value === "string" && value.trim()) || "";
+}
+
 function truncate(text, max) {
-  if (!text || typeof text !== "string") return text || "";
+  if (typeof text !== "string") return "";
   if (!max || max <= 0) return text;
   return text.length > max ? text.slice(0, max) : text;
 }
@@ -103,21 +107,20 @@ export async function handleFetchCore({ url, format, maxCharacters, provider, pr
   const startedAt = Date.now();
 
   try {
-    if (provider === "firecrawl") {
-      return await runFirecrawl({ url, fmt, timeoutMs, apiKey, maxCharacters, costPerQuery, startedAt });
-    }
-    if (provider === "jina-reader") {
-      return await runJina({ url, fmt, timeoutMs, apiKey, maxCharacters, costPerQuery, startedAt });
-    }
-    if (provider === "tavily") {
-      return await runTavily({ url, fmt, timeoutMs, apiKey, maxCharacters, costPerQuery, startedAt });
-    }
-    if (provider === "exa") {
-      return await runExa({ url, fmt, timeoutMs, apiKey, maxCharacters, costPerQuery, startedAt });
+    const handlers = { firecrawl: runFirecrawl, "jina-reader": runJina, tavily: runTavily, exa: runExa };
+    const handler = Object.hasOwn(handlers, provider) ? handlers[provider] : null;
+    if (handler) {
+      const result = await handler({ url, fmt, timeoutMs, apiKey, maxCharacters, costPerQuery, startedAt });
+      if (result.success && !extractionText(result.data?.content?.text)) {
+        return { success: false, status: 502, code: "EMPTY_EXTRACTION",
+          error: provider + " returned no usable extracted content" };
+      }
+      return result;
     }
     return { success: false, status: 400, error: `Unsupported provider: ${provider}` };
   } catch (err) {
-    log?.("fetch handler error:", err?.message || err);
+    if (typeof log === "function") log("fetch handler error:", err?.message || err);
+    else log?.error?.("FETCH", "fetch handler error", { error: err?.message || String(err) });
     return { success: false, status: 502, error: err?.message || "Internal fetch error" };
   }
 }
@@ -142,7 +145,7 @@ async function runFirecrawl({ url, fmt, timeoutMs, apiKey, maxCharacters, costPe
     return { success: false, status: r.res.status, error: json?.error || `Firecrawl error: ${r.res.status}` };
   }
   const d = json?.data || {};
-  const text = truncate(d.markdown || d.html || d.text || "", maxCharacters);
+  const text = truncate(extractionText(d.markdown, d.html, d.text), maxCharacters);
   const title = d.metadata?.title || null;
   return {
     success: true,
@@ -202,7 +205,7 @@ async function runTavily({ url, fmt, timeoutMs, apiKey, maxCharacters, costPerQu
     return { success: false, status: r.res.status, error: json?.error || `Tavily error: ${r.res.status}` };
   }
   const first = json?.results?.[0] || {};
-  const text = truncate(first.raw_content || "", maxCharacters);
+  const text = truncate(extractionText(first.raw_content), maxCharacters);
   return {
     success: true,
     data: buildData({
@@ -232,7 +235,7 @@ async function runExa({ url, fmt, timeoutMs, apiKey, maxCharacters, costPerQuery
     return { success: false, status: r.res.status, error: json?.error || `Exa error: ${r.res.status}` };
   }
   const first = json?.results?.[0] || {};
-  const text = truncate(first.text || "", maxCharacters);
+  const text = truncate(extractionText(first.text), maxCharacters);
   return {
     success: true,
     data: buildData({

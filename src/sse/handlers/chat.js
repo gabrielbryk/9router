@@ -23,6 +23,8 @@ import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
+import { resolveRequestId, withRequestId, throwIfRequestAborted } from "open-sse/utils/requestLifecycle.js";
+import { resolveCompatibleTransportPolicy } from "open-sse/config/compatibleTransport.js";
 
 /**
  * Handle chat completion request
@@ -30,6 +32,21 @@ import { getProjectIdForConnection } from "open-sse/services/projectId.js";
  * Format detection and translation handled by translator
  */
 export async function handleChat(request, clientRawRequest = null) {
+  const requestId = resolveRequestId(request.headers.get("x-request-id"));
+  try {
+    throwIfRequestAborted(request.signal);
+    const response = await handleChatRequest(request, clientRawRequest, requestId);
+    throwIfRequestAborted(request.signal);
+    return withRequestId(response, requestId);
+  } catch (error) {
+    if (request.signal?.aborted || error.name === "AbortError") {
+      return withRequestId(errorResponse(499, "Request aborted"), requestId);
+    }
+    throw error;
+  }
+}
+
+async function handleChatRequest(request, clientRawRequest, requestId) {
   let body;
   try {
     body = await request.json();
@@ -47,6 +64,11 @@ export async function handleChat(request, clientRawRequest = null) {
       headers: Object.fromEntries(request.headers.entries())
     };
   }
+  clientRawRequest = {
+    ...clientRawRequest,
+    requestId,
+    headers: { ...clientRawRequest.headers, "x-request-id": requestId },
+  };
   const modelStr = body.model;
 
   // Request summary is emitted as the unified "▶" line in chatCore (has fmt/thinking/account)
@@ -159,6 +181,7 @@ export async function handleChat(request, clientRawRequest = null) {
  * Handle single model chat request
  */
 async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null) {
+  throwIfRequestAborted(request?.signal);
   const modelInfo = await getModelInfo(modelStr);
 
   // If provider is null, this might be a combo name - check and handle
@@ -226,6 +249,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
   let lastStatus = null;
 
   while (true) {
+    throwIfRequestAborted(request?.signal);
     const credentials = await getProviderCredentials(provider, excludeConnectionIds, model);
 
     // All accounts unavailable
@@ -269,6 +293,8 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       connectionId: credentials.connectionId,
       userAgent,
       apiKey,
+      signal: request?.signal,
+      requestId: clientRawRequest?.requestId,
       ccFilterNaming: !!chatSettings.ccFilterNaming,
       rtkEnabled: !!chatSettings.rtkEnabled,
       headroomEnabled: !!chatSettings.headroomEnabled,
@@ -300,7 +326,15 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       }
     });
 
+    throwIfRequestAborted(request?.signal);
     if (result.success) return result.response;
+
+    // An explicit single-attempt local route owns its admission policy. A full
+    // engine queue is not evidence that the selected API credential is bad.
+    const transportPolicy = resolveCompatibleTransportPolicy(provider, refreshedCredentials);
+    const capacityFailure = result.status === 429 || result.status === 503
+      || (result.status === 500 && /queue is full/i.test(result.error || ""));
+    if (transportPolicy.retry?.[429]?.attempts === 0 && capacityFailure) return result.response;
 
     // Antigravity 409/429: refresh live quota to get exact resetAt before locking
     let quotaResetMs = null;
