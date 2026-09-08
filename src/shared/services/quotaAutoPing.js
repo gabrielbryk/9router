@@ -75,13 +75,67 @@ function wasPingedRecently(connection, intervalMs, nowMs = Date.now()) {
   return Number.isFinite(lastPingAtMs) && nowMs - lastPingAtMs < intervalMs;
 }
 
-function isBlockingQuotaName(name, sessionKey) {
-  if (name === sessionKey) return false;
+/**
+ * A blocking quota is any window OTHER than the one being warmed that would reject
+ * the ping anyway (long-horizon caps). Sibling short windows are never blocking.
+ * @param {string} name quota key
+ * @param {string} warmedKey key of the window auto-ping is warming
+ * @returns {boolean}
+ */
+function isBlockingQuotaName(name, warmedKey) {
+  if (name === warmedKey) return false;
   return !String(name).toLowerCase().includes("session");
 }
 
-function hasExhaustedBlockingQuota(quotas, sessionKey) {
-  return Object.entries(quotas || {}).some(([name, quota]) => isBlockingQuotaName(name, sessionKey) && isQuotaExhausted(quota));
+function hasExhaustedBlockingQuota(quotas, warmedKey) {
+  return Object.entries(quotas || {}).some(([name, quota]) => isBlockingQuotaName(name, warmedKey) && isQuotaExhausted(quota));
+}
+
+/**
+ * Quota families a provider's ping model cannot warm (Codex `spark_`/`review_` are
+ * metered separately from the family the ping model belongs to).
+ * @param {string} name quota key
+ * @param {object} providerConfig entry from QUOTA_AUTOPING_CONFIG.providers
+ * @returns {boolean}
+ */
+function isWarmableQuotaFamily(name, providerConfig) {
+  const prefixes = providerConfig.nonWarmableQuotaPrefixes || [];
+  return !prefixes.some((prefix) => String(name).startsWith(prefix));
+}
+
+/**
+ * Turn one quota entry into a warm-target candidate, or null when it is not one.
+ * Real durations win: a window is warmable only while it stays sub-daily. Handlers
+ * that report no duration at all (Claude) keep the legacy key-name behavior.
+ * @returns {{name: string, quota: object, windowSeconds: number|null}|null}
+ */
+function toWarmableCandidate(name, quota, providerConfig) {
+  const windowSeconds = toFiniteNumber(quota?.windowSeconds);
+  if (windowSeconds !== null) {
+    const warmable = windowSeconds > 0 && windowSeconds <= C.maxWarmableWindowSeconds;
+    return warmable ? { name, quota, windowSeconds } : null;
+  }
+  return name === providerConfig.quotaKey ? { name, quota, windowSeconds: null } : null;
+}
+
+/**
+ * Pick the quota window auto-ping should keep warm: the shortest warmable window the
+ * usage handler reported. Returns null when the account has none — e.g. a Pro Codex
+ * account whose only main-family window is the 7-day one — so the caller can skip it.
+ * @param {object} quotas usage handler quotas map
+ * @param {object} providerConfig entry from QUOTA_AUTOPING_CONFIG.providers
+ * @returns {{name: string, quota: object, windowSeconds: number|null}|null}
+ */
+function selectWarmableQuota(quotas, providerConfig) {
+  const candidates = Object.entries(quotas || {})
+    .filter(([name]) => isWarmableQuotaFamily(name, providerConfig))
+    .map(([name, quota]) => toWarmableCandidate(name, quota, providerConfig))
+    .filter(Boolean);
+  if (candidates.length === 0) return null;
+
+  // Shortest known window first; an untimed configured-key window is the last resort.
+  candidates.sort((a, b) => (a.windowSeconds ?? Infinity) - (b.windowSeconds ?? Infinity));
+  return candidates[0];
 }
 
 function shouldPingForReset(providerConfig, cachedReset, resetAt, now) {
@@ -210,13 +264,15 @@ async function pingConnection(conn, provider, providerConfig, handler, deps, sta
 
   const usage = await handler.getUsage(connection.accessToken, proxyOptions);
   const quotas = usage?.quotas || {};
-  const quota = quotas?.[providerConfig.quotaKey];
+  // Nothing sub-daily to warm (e.g. Codex Pro exposes only a 7-day window): skip silently.
+  const warmTarget = selectWarmableQuota(quotas, providerConfig);
+  const quota = warmTarget?.quota;
   const resetAt = quota?.resetAt;
   if (!resetAt) return;
 
   state.resetCache[key] = resetAt;
 
-  if (providerConfig.skipWhenBlockingQuotaExhausted && hasExhaustedBlockingQuota(quotas, providerConfig.quotaKey)) return;
+  if (providerConfig.skipWhenBlockingQuotaExhausted && hasExhaustedBlockingQuota(quotas, warmTarget.name)) return;
   if (isQuotaExhausted(quota)) return;
 
   const now = Date.now();
