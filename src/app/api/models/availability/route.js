@@ -3,6 +3,7 @@ import {
   getProviderConnections,
   updateProviderConnection,
 } from "@/lib/localDb";
+import { formatQuotaScopeLabel } from "open-sse/services/accountFallback.js";
 
 const MODEL_LOCK_PREFIX = "modelLock_";
 
@@ -12,7 +13,10 @@ function getActiveModelLocks(connection) {
     .filter(([key, value]) => key.startsWith(MODEL_LOCK_PREFIX) && value)
     .map(([key, value]) => ({
       key,
+      // `model` is the lock scope and stays the identifier the clear action posts back;
+      // `label` is only how it reads in the UI (a family scope is not a model id).
       model: key.slice(MODEL_LOCK_PREFIX.length) || "__all",
+      label: formatQuotaScopeLabel(key.slice(MODEL_LOCK_PREFIX.length) || "__all"),
       until: value,
       active: new Date(value).getTime() > now,
     }))
@@ -42,6 +46,7 @@ export async function GET() {
         models.push({
           provider: connection.provider,
           model: "__all",
+          label: formatQuotaScopeLabel("__all"),
           status: "unavailable",
           connectionId: connection.id,
           connectionName: connection.name || connection.email || connection.id,

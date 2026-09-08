@@ -55,7 +55,7 @@ export default function ModelAvailabilityBadge() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [expanded]);
 
-  const handleClearCooldown = async (provider, model) => {
+  const handleClearCooldown = async (provider, model, label = null) => {
     setClearing(`${provider}:${model}`);
     try {
       const res = await fetch("/api/models/availability", {
@@ -64,7 +64,7 @@ export default function ModelAvailabilityBadge() {
         body: JSON.stringify({ action: "clearCooldown", provider, model }),
       });
       if (res.ok) {
-        notify.success(`Cooldown cleared for ${model}`);
+        notify.success(`Cooldown cleared for ${label || model}`);
         await fetchStatus();
       } else {
         notify.error("Failed to clear cooldown");
@@ -156,13 +156,13 @@ export default function ModelAvailabilityBadge() {
                               >
                                 {status.icon}
                               </span>
-                              <span className="font-mono text-xs text-text-main truncate">{m.model}</span>
+                              <span className="font-mono text-xs text-text-main truncate">{m.label || m.model}</span>
                             </div>
                             {m.status === "cooldown" && (
                               <Button
                                 size="sm"
                                 variant="ghost"
-                                onClick={() => handleClearCooldown(m.provider, m.model)}
+                                onClick={() => handleClearCooldown(m.provider, m.model, m.label)}
                                 disabled={isClearing}
                                 className="text-[10px] px-1.5! py-0.5! ml-2"
                               >
