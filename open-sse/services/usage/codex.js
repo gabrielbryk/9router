@@ -39,6 +39,61 @@ function getCodexRateLimitBody(snapshot) {
     : snapshot;
 }
 
+/**
+ * OpenAI exposes two Codex quota horizons: a short rolling window (5h) and a
+ * long one (7d). Which SLOT each lands in is plan-dependent — Pro accounts put
+ * the 7-day window in `primary_window` and leave `secondary_window` null — so
+ * windows must be classified by their real `limit_window_seconds`, never by
+ * slot position. The thresholds below are deliberately loose bands around the
+ * documented 5h/7d durations so minor upstream tweaks still classify sanely.
+ */
+const CODEX_WINDOW_SECONDS = {
+  // <= 6h: the short rolling window the dashboard labels "5h".
+  SESSION_MAX: 6 * 60 * 60,
+  // >= 24h: a long-horizon window the dashboard labels "Weekly".
+  WEEKLY_MIN: 24 * 60 * 60,
+};
+
+// Quota keys consumed by ProviderLimits/utils.js (optionally prefixed with a family).
+const CODEX_WINDOW_KEY = {
+  SESSION: "session",
+  WEEKLY: "weekly",
+};
+
+// Unexpected durations get surfaced under `window_<seconds>` rather than being mislabeled.
+const CODEX_UNKNOWN_WINDOW_KEY_PREFIX = "window_";
+
+/**
+ * Read a window's true duration in seconds.
+ * @param {object|null|undefined} window Raw window payload.
+ * @returns {number|null} Positive finite seconds, or null when the payload omits it.
+ */
+function getCodexWindowSeconds(window) {
+  const raw = window?.limit_window_seconds ?? window?.window_seconds ?? window?.windowSeconds ?? null;
+  const seconds = toFiniteNumber(raw, null);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
+/**
+ * Classify a raw window into a quota key by its actual duration.
+ * Falls back to the legacy positional key when the payload has no duration.
+ * @param {object|null|undefined} window Raw window payload.
+ * @param {string} positionalKey Legacy slot-derived key ("session" | "weekly").
+ * @returns {string} Unprefixed quota key.
+ */
+function classifyCodexWindowKey(window, positionalKey) {
+  const seconds = getCodexWindowSeconds(window);
+  if (seconds === null) return positionalKey;
+  if (seconds <= CODEX_WINDOW_SECONDS.SESSION_MAX) return CODEX_WINDOW_KEY.SESSION;
+  if (seconds >= CODEX_WINDOW_SECONDS.WEEKLY_MIN) return CODEX_WINDOW_KEY.WEEKLY;
+  return `${CODEX_UNKNOWN_WINDOW_KEY_PREFIX}${Math.round(seconds)}`;
+}
+
+/**
+ * Normalize one rate-limit window into the dashboard quota shape.
+ * @param {object|null|undefined} window Raw window payload.
+ * @returns {{used:number,total:number,remaining:number,resetAt:string|null,unlimited:boolean,windowSeconds:number|null}}
+ */
 function formatCodexWindow(window) {
   const used = Math.max(0, Math.min(100, toFiniteNumber(window?.used_percent ?? window?.percent_used, 0)));
   return {
@@ -47,9 +102,49 @@ function formatCodexWindow(window) {
     remaining: Math.max(0, 100 - used),
     resetAt: parseResetTime(window?.reset_at ?? window?.resets_at ?? window?.resetAt ?? null),
     unlimited: false,
+    // Finite seconds when the payload provides a duration, otherwise null.
+    windowSeconds: getCodexWindowSeconds(window),
   };
 }
 
+/**
+ * Store one classified window under `<prefix>_<key>`.
+ *
+ * INVARIANT: a window NEVER overwrites a window a previous slot already stored.
+ * Two slots can legitimately classify to the same key (e.g. a 7d primary and a
+ * 30d secondary are both "weekly"), so the key is resolved through a chain that
+ * is guaranteed to terminate on a free slot: classified key → positional key →
+ * duration-derived `window_<seconds>` key → that key with a numeric suffix.
+ * Surfacing a window under an odd key is always preferable to dropping it.
+ */
+function assignCodexQuotaWindow(quotas, prefix, window, positionalKey) {
+  const withPrefix = (key) => (prefix ? `${prefix}_${key}` : key);
+  const seconds = getCodexWindowSeconds(window);
+  const candidates = [
+    classifyCodexWindowKey(window, positionalKey),
+    positionalKey,
+  ];
+  if (seconds !== null) {
+    candidates.push(`${CODEX_UNKNOWN_WINDOW_KEY_PREFIX}${Math.round(seconds)}`);
+  }
+
+  let key = candidates.map(withPrefix).find((candidate) => !(candidate in quotas));
+  if (!key) {
+    // Every preferred key is taken — disambiguate rather than drop the window.
+    const base = withPrefix(candidates[candidates.length - 1]);
+    let suffix = 2;
+    while (`${base}_${suffix}` in quotas) suffix += 1;
+    key = `${base}_${suffix}`;
+  }
+
+  quotas[key] = formatCodexWindow(window);
+}
+
+/**
+ * Append a rate-limit family's windows to the quota map.
+ * Shared by the main, `spark_` and `review_` families.
+ * @returns {boolean} Whether any window was added.
+ */
 function appendCodexQuotaWindows(quotas, prefix, snapshot) {
   const rateLimit = getCodexRateLimitBody(snapshot);
   if (!rateLimit) return false;
@@ -59,15 +154,78 @@ function appendCodexQuotaWindows(quotas, prefix, snapshot) {
   let added = false;
 
   if (primary) {
-    quotas[prefix ? `${prefix}_session` : "session"] = formatCodexWindow(primary);
+    assignCodexQuotaWindow(quotas, prefix, primary, CODEX_WINDOW_KEY.SESSION);
     added = true;
   }
   if (secondary) {
-    quotas[prefix ? `${prefix}_weekly` : "weekly"] = formatCodexWindow(secondary);
+    assignCodexQuotaWindow(quotas, prefix, secondary, CODEX_WINDOW_KEY.WEEKLY);
     added = true;
   }
 
   return added;
+}
+
+/**
+ * Normalize `model_usage` (model id -> availability).
+ * DISPLAY/DATA ONLY: this is not consumed by routing or dispatch today —
+ * wiring model availability into model selection is a deliberate follow-up.
+ * @returns {Record<string,{available:boolean,availableAt:string|null,creditsWouldEnable:boolean}>|null}
+ */
+function normalizeCodexModelUsage(modelUsage) {
+  if (!modelUsage || typeof modelUsage !== "object" || Array.isArray(modelUsage)) return null;
+
+  const normalized = {};
+  for (const [modelId, entry] of Object.entries(modelUsage)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    normalized[modelId] = {
+      available: entry.available === true,
+      availableAt: toIsoDate(entry.available_at ?? entry.availableAt),
+      creditsWouldEnable: entry.credits_would_enable === true,
+    };
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+/**
+ * Normalize `spend_control.individual_limit` (money fields arrive as strings).
+ */
+function normalizeCodexSpendLimit(limit) {
+  if (!limit || typeof limit !== "object" || Array.isArray(limit)) return null;
+  return {
+    source: typeof limit.source === "string" ? limit.source : null,
+    limit: toFiniteNumber(limit.limit, null),
+    used: toFiniteNumber(limit.used, null),
+    remaining: toFiniteNumber(limit.remaining, null),
+    usedPercent: toFiniteNumber(limit.used_percent, null),
+    remainingPercent: toFiniteNumber(limit.remaining_percent, null),
+    resetAfterSeconds: toFiniteNumber(limit.reset_after_seconds, null),
+    resetAt: toIsoDate(limit.reset_at ?? limit.resetAt),
+  };
+}
+
+/**
+ * Normalize `spend_control`.
+ */
+function normalizeCodexSpendControl(spendControl) {
+  if (!spendControl || typeof spendControl !== "object" || Array.isArray(spendControl)) return null;
+  return {
+    reached: spendControl.reached === true,
+    individualLimit: normalizeCodexSpendLimit(spendControl.individual_limit ?? spendControl.individualLimit),
+  };
+}
+
+/**
+ * Normalize the `credits` block (balance arrives as a numeric string or null).
+ */
+function normalizeCodexCredits(credits) {
+  if (!credits || typeof credits !== "object" || Array.isArray(credits)) return null;
+  return {
+    hasCredits: credits.has_credits === true,
+    unlimited: credits.unlimited === true,
+    overageLimitReached: credits.overage_limit_reached === true,
+    balance: toFiniteNumber(credits.balance, null),
+  };
 }
 
 function getCodexReviewRateLimit(data) {
@@ -122,7 +280,10 @@ export async function getCodexUsage(accessToken, proxyOptions = null) {
     const normalRateLimit = data.rate_limit || data.rate_limits || data.rate_limits_by_limit_id?.codex || {};
     const reviewRateLimit = getCodexReviewRateLimit(data);
     const sparkRateLimit = getCodexSparkRateLimit(data);
-    const availableResetCredits = Math.max(0, toFiniteNumber(data.rate_limit_reset_credits?.available_count, 0));
+    const resetCreditsPayload = data.rate_limit_reset_credits || null;
+    const availableResetCredits = Math.max(0, toFiniteNumber(resetCreditsPayload?.available_count, 0));
+    // Credits can exist yet be non-redeemable against the current windows.
+    const applicableResetCredits = Math.max(0, toFiniteNumber(resetCreditsPayload?.applicable_available_count, 0));
     const quotas = {};
 
     appendCodexQuotaWindows(quotas, "", normalRateLimit);
@@ -134,8 +295,14 @@ export async function getCodexUsage(accessToken, proxyOptions = null) {
       limitReached: getCodexRateLimitBody(normalRateLimit)?.limit_reached || false,
       reviewLimitReached: getCodexRateLimitBody(reviewRateLimit)?.limit_reached || false,
       sparkLimitReached: getCodexRateLimitBody(sparkRateLimit)?.limit_reached || false,
-      resetCredits: { availableCount: availableResetCredits },
+      resetCredits: {
+        availableCount: availableResetCredits,
+        applicableCount: applicableResetCredits,
+      },
       quotas,
+      modelUsage: normalizeCodexModelUsage(data.model_usage),
+      spendControl: normalizeCodexSpendControl(data.spend_control),
+      credits: normalizeCodexCredits(data.credits),
     };
   } catch (error) {
     throw new Error(`Failed to fetch Codex usage: ${error.message}`);
