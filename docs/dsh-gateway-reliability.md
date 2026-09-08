@@ -60,3 +60,23 @@ built from `Dockerfile.dsh` regenerated against upstream's current Dockerfile.
 Staged and activated through Coolify with rollback record
 `~/.local/state/dsh-gateway-releases/20260908T095312Z/release.json`
 (previous image `local/9router:dsh-9a8efd1a`).
+
+## Codex quota recognition (2026-09-08)
+
+Three fixes for Codex quota handling, branch `dsh/codex-quota-families`:
+
+1. Quota windows are classified by `limit_window_seconds` rather than by their
+   slot in OpenAI's payload. Pro accounts report the 7-day window in
+   `primary_window` with a null secondary, so slot-based labelling rendered it
+   as "5h" and showed no weekly bar. Windows now carry `windowSeconds`, and the
+   handler also parses `model_usage`, `applicable_available_count` and
+   `spend_control`.
+2. Rate-limit locks are keyed by quota family (`codex:normal` / `:spark` /
+   `:review`) via `resolveQuotaScope`, opted into by `quotaScope: "family"` in
+   the registry. Every other provider still locks per model id.
+3. Auto-ping selects the shortest warmable window instead of a fixed `session`
+   key, and skips accounts with nothing sub-daily to warm.
+
+Full suite: 2162 passing / 114 pre-existing failures, no pass→fail regressions
+against either plain v0.5.69 or the previous release. Provider, alias and OAuth
+baselines byte-for-byte equal.
