@@ -322,7 +322,9 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   });
 
   // Keep caller cancellation connected during header wait and body streaming.
-  const executionSignal = signal ? AbortSignal.any([signal, streamController.signal]) : streamController.signal;
+  const executionSignal = signal && streamController.signal
+    ? AbortSignal.any([signal, streamController.signal])
+    : (signal || streamController.signal);
 
   const proxyOptions = {
     connectionProxyEnabled: credentials?.providerSpecificData?.connectionProxyEnabled === true,
@@ -383,7 +385,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     providerResponseFormat = result.responseFormat || targetFormat;
     reqLogger.logTargetRequest(providerUrl, providerHeaders, finalBody);
   } catch (error) {
-    const aborted = executionSignal.aborted || error.name === "AbortError";
+    const aborted = executionSignal?.aborted || error.name === "AbortError";
     trackPendingRequest(model, provider, connectionId, false, true);
     appendRequestLog({ model, provider, connectionId, status: `FAILED ${aborted ? 499 : HTTP_STATUS.BAD_GATEWAY}` }).catch(() => { });
     saveRequestDetail(buildRequestDetail({
@@ -458,7 +460,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     }
   }
 
-  if (executionSignal.aborted) {
+  if (executionSignal?.aborted) {
     trackPendingRequest(model, provider, connectionId, false);
     streamController.handleComplete();
     return createErrorResult(499, "Request aborted");
