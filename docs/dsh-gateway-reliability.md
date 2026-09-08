@@ -37,3 +37,26 @@ The dedicated muninn-local-gateway Spark key limits eight active requests;
 this bounds this gateway path, not unrelated direct Spark clients. The previous
 shared title key is preserved. qwen38 is unavailable while its engine is absent;
 Flash Next remains an explicit distinct model.
+
+## Rebase onto upstream v0.5.69 (2026-09-08)
+
+The patch stack now sits on upstream `eb712ca8` (v0.5.69) as branch
+`dsh/v0.5.69`, combining the gateway reliability work with the dashboard
+live-model-catalog fix. Conflicts resolved in favour of keeping both sides:
+`[1m]` context-marker stripping alongside request-id propagation in
+`src/sse/handlers/chat.js`, upstream's `providerSessionId`/`clientTool`
+executor arguments alongside the cancellation signal in
+`open-sse/handlers/chatCore.js`, and the fetch lock key alongside the typed
+`EMPTY_EXTRACTION` return in `src/sse/handlers/fetch.js`. The composed
+execution signal is now optional-safe because upstream stream controllers may
+carry no signal.
+
+Full suite versus plain v0.5.69: no pass→fail regressions (2113 passing here
+against 2070 upstream, identical 114 pre-existing failures).
+
+Release image `local/9router:dsh-cc1dcbdd`
+(`sha256:6ed975cc5bf24abc45d6577b4e6bc9c2ba89fc30ed2303a971eee6229a803d5f`),
+built from `Dockerfile.dsh` regenerated against upstream's current Dockerfile.
+Staged and activated through Coolify with rollback record
+`~/.local/state/dsh-gateway-releases/20260908T095312Z/release.json`
+(previous image `local/9router:dsh-9a8efd1a`).
