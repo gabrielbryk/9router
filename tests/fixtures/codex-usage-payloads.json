@@ -1,0 +1,195 @@
+{
+  "pro_account_1": {
+    "plan_type": "pro",
+    "rate_limit": {
+      "allowed": true,
+      "limit_reached": false,
+      "primary_window": {
+        "used_percent": 15,
+        "limit_window_seconds": 604800,
+        "reset_after_seconds": 591094,
+        "reset_at": 1789456374
+      },
+      "secondary_window": null
+    },
+    "code_review_rate_limit": null,
+    "additional_rate_limits": [
+      {
+        "limit_name": "GPT-5.3-Codex-Spark",
+        "metered_feature": "codex_bengalfox",
+        "rate_limit": {
+          "allowed": true,
+          "limit_reached": false,
+          "primary_window": {
+            "used_percent": 0,
+            "limit_window_seconds": 18000,
+            "reset_after_seconds": 18000,
+            "reset_at": 1788883280
+          },
+          "secondary_window": {
+            "used_percent": 0,
+            "limit_window_seconds": 604800,
+            "reset_after_seconds": 604800,
+            "reset_at": 1789470080
+          }
+        },
+        "normal_model_slug": null
+      }
+    ],
+    "model_usage": {
+      "gpt-6-astra": {
+        "available": true,
+        "available_at": null,
+        "credits_would_enable": false
+      }
+    },
+    "credits": {
+      "has_credits": false,
+      "unlimited": false,
+      "overage_limit_reached": false,
+      "balance": "0",
+      "approx_local_messages": [
+        0,
+        0
+      ],
+      "approx_cloud_messages": [
+        0,
+        0
+      ]
+    },
+    "spend_control": {
+      "reached": false,
+      "individual_limit": null
+    },
+    "rate_limit_reached_type": null,
+    "promo": null,
+    "rate_limit_reset_credits": {
+      "available_count": 3,
+      "applicable_available_count": 0
+    }
+  },
+  "pro_account_2": {
+    "plan_type": "pro",
+    "rate_limit": {
+      "allowed": true,
+      "limit_reached": false,
+      "primary_window": {
+        "used_percent": 45,
+        "limit_window_seconds": 604800,
+        "reset_after_seconds": 574935,
+        "reset_at": 1789440216
+      },
+      "secondary_window": null
+    },
+    "code_review_rate_limit": null,
+    "additional_rate_limits": [
+      {
+        "limit_name": "GPT-5.3-Codex-Spark",
+        "metered_feature": "codex_bengalfox",
+        "rate_limit": {
+          "allowed": true,
+          "limit_reached": false,
+          "primary_window": {
+            "used_percent": 0,
+            "limit_window_seconds": 18000,
+            "reset_after_seconds": 18000,
+            "reset_at": 1788883281
+          },
+          "secondary_window": {
+            "used_percent": 0,
+            "limit_window_seconds": 604800,
+            "reset_after_seconds": 604800,
+            "reset_at": 1789470081
+          }
+        },
+        "normal_model_slug": null
+      }
+    ],
+    "model_usage": {
+      "gpt-6-astra": {
+        "available": true,
+        "available_at": null,
+        "credits_would_enable": false
+      }
+    },
+    "credits": {
+      "has_credits": false,
+      "unlimited": false,
+      "overage_limit_reached": false,
+      "balance": "0",
+      "approx_local_messages": [
+        0,
+        0
+      ],
+      "approx_cloud_messages": [
+        0,
+        0
+      ]
+    },
+    "spend_control": {
+      "reached": false,
+      "individual_limit": null
+    },
+    "rate_limit_reached_type": null,
+    "promo": null,
+    "rate_limit_reset_credits": {
+      "available_count": 1,
+      "applicable_available_count": 0
+    }
+  },
+  "team_account_3": {
+    "plan_type": "team",
+    "rate_limit": {
+      "allowed": true,
+      "limit_reached": false,
+      "primary_window": {
+        "used_percent": 13,
+        "limit_window_seconds": 18000,
+        "reset_after_seconds": 9297,
+        "reset_at": 1788874577
+      },
+      "secondary_window": {
+        "used_percent": 2,
+        "limit_window_seconds": 604800,
+        "reset_after_seconds": 596097,
+        "reset_at": 1789461377
+      }
+    },
+    "code_review_rate_limit": null,
+    "additional_rate_limits": null,
+    "model_usage": {
+      "gpt-6-astra": {
+        "available": true,
+        "available_at": null,
+        "credits_would_enable": false
+      }
+    },
+    "credits": {
+      "has_credits": true,
+      "unlimited": false,
+      "overage_limit_reached": false,
+      "balance": null,
+      "approx_local_messages": null,
+      "approx_cloud_messages": null
+    },
+    "spend_control": {
+      "reached": false,
+      "individual_limit": {
+        "source": "account_user_spend_controls",
+        "limit": "2500",
+        "used": "0.0",
+        "remaining": "2500.0",
+        "used_percent": 0,
+        "remaining_percent": 100,
+        "reset_after_seconds": 1947519,
+        "reset_at": 1790812800
+      }
+    },
+    "rate_limit_reached_type": null,
+    "promo": null,
+    "rate_limit_reset_credits": {
+      "available_count": 3,
+      "applicable_available_count": 0
+    }
+  }
+}

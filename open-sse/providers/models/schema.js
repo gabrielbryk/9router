@@ -32,6 +32,11 @@ export function modelKind(model) {
 export function modelQuotaFamily(model) {
   return model?.quotaFamily || MODEL_DEFAULTS.quotaFamily;
 }
+
+// Opt-in value for a registry entry's `quotaScope`: this provider enforces its rate
+// limits per quota FAMILY (see modelQuotaFamily) instead of per model id. Consumed by
+// resolveQuotaScope() in services/accountFallback.js.
+export const QUOTA_SCOPE_FAMILY = "family";
 export function modelStrip(model) {
   return model?.strip || [];
 }

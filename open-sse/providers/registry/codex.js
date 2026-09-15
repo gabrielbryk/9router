@@ -1,4 +1,5 @@
 import { withCodexReviewModels } from "../models/helpers.js";
+import { QUOTA_SCOPE_FAMILY } from "../models/schema.js";
 
 export default {
   id: "codex",
@@ -20,6 +21,10 @@ export default {
     },
   },
   category: "oauth",
+  // Codex meters per quota family, not per model: every model below without an explicit
+  // quotaFamily shares rate_limit.primary_window, spark reports its own window and code
+  // review a third one. Rate-limit locks are therefore keyed by family (resolveQuotaScope).
+  quotaScope: QUOTA_SCOPE_FAMILY,
   thinkingConfig: {
     options: [
       "auto",
@@ -45,6 +50,7 @@ export default {
     },
   },
   models: [
+    { id: "gpt-6-astra", name: "GPT 6.0 Astra" },
     { id: "gpt-5.6-sol", name: "GPT 5.6 Sol" },
     { id: "gpt-5.6-sol-review", name: "GPT 5.6 Sol Review", upstreamModelId: "gpt-5.6-sol", quotaFamily: "review" },
     { id: "gpt-5.6-terra", name: "GPT 5.6 Terra" },
@@ -57,8 +63,11 @@ export default {
     { id: "gpt-5.4-review", name: "GPT 5.4 Review", upstreamModelId: "gpt-5.4", quotaFamily: "review" },
     { id: "gpt-5.4-mini", name: "GPT 5.4 Mini" },
     { id: "gpt-5.4-mini-review", name: "GPT 5.4 Mini Review", upstreamModelId: "gpt-5.4-mini", quotaFamily: "review" },
-    { id: "gpt-5.3-codex-spark", name: "GPT 5.3 Codex Spark" },
+    { id: "gpt-5.3-codex-spark", name: "GPT 5.3 Codex Spark", quotaFamily: "spark" },
     { id: "gpt-5.3-codex-spark-review", name: "GPT 5.3 Codex Spark Review", upstreamModelId: "gpt-5.3-codex-spark", quotaFamily: "review" },
+    { id: "gpt-5.6-sol-image", name: "GPT 5.6 Sol Image", capabilities: ["text2img","edit"], params: ["size","quality","background","image_detail","output_format"], kind: "image" },
+    { id: "gpt-5.6-terra-image", name: "GPT 5.6 Terra Image", capabilities: ["text2img","edit"], params: ["size","quality","background","image_detail","output_format"], kind: "image" },
+    { id: "gpt-5.6-luna-image", name: "GPT 5.6 Luna Image", capabilities: ["text2img","edit"], params: ["size","quality","background","image_detail","output_format"], kind: "image" },
     { id: "gpt-5.5-image", name: "GPT 5.5 Image", capabilities: ["text2img","edit"], params: ["size","quality","background","image_detail","output_format"], kind: "image" },
     { id: "gpt-5.4-image", name: "GPT 5.4 Image", capabilities: ["text2img","edit"], params: ["size","quality","background","image_detail","output_format"], kind: "image" },
     { id: "gpt-5.3-image", name: "GPT 5.3 Image", capabilities: ["text2img","edit"], params: ["size","quality","background","image_detail","output_format"], kind: "image" },

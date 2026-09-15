@@ -62,23 +62,36 @@ export const CONSOLE_LOG_CONFIG = {
 // Client-side store TTL: how long fetched data stays fresh before re-fetching
 export const CLIENT_STORE_TTL_MS = 60000;
 
-// Quota auto-ping: keep 5h windows warm by sending a tiny request right after reset.
+// Longest quota window auto-ping will bother warming, in seconds.
+// A "warm" ping only pays off for short, frequently-recycling windows: it starts the
+// window early so the whole allowance is usable. Anything longer than this (weekly /
+// monthly caps) resets too rarely for an early start to matter, so those are skipped.
+export const WARMABLE_WINDOW_MAX_SECONDS = 21600; // 6h — matches the usage handlers' "session" family ceiling
+
+// Quota auto-ping: keep short (5h) windows warm by sending a tiny request right after reset.
 export const QUOTA_AUTOPING_CONFIG = {
   tickIntervalMs: 60000,                // scheduler tick
   pingLeadMs: 5000,                     // fire once reset passes (within tolerance)
   refreshAheadMs: 300000,               // refetch usage when within 5min of reset
   failureCooldownMs: 900000,            // avoid failed ping spam while upstream/auth is unhealthy
+  maxWarmableWindowSeconds: WARMABLE_WINDOW_MAX_SECONDS,
   providers: {
     claude: {
       settingsKey: "claudeAutoPing",    // preserve existing settings contract
-      quotaKey: "session (5h)",         // quota key returned by usage handler
+      // Claude quotas carry no windowSeconds, so the window is picked by key name.
+      quotaKey: "session (5h)",         // name-based fallback: quota key returned by usage handler
       pingModel: "claude-haiku-4-5-20251001",
       pingText: "hi",
       pingMaxTokens: 1,
     },
     codex: {
       settingsKey: "codexAutoPing",
+      // Codex quotas carry windowSeconds, so the window is picked by real duration;
+      // this key is only the fallback for payloads that omit the duration.
       quotaKey: "session",
+      // pingModel belongs to the main Codex quota family, so these separately metered
+      // families cannot be warmed by it (a spark window needs a spark ping model).
+      nonWarmableQuotaPrefixes: ["spark_", "review_"],
       pingWhenResetAtSlides: true,
       resetAtDriftMs: 30000,
       minPingIntervalMs: 600000,

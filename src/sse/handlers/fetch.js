@@ -13,7 +13,14 @@ import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { handleComboChat, getComboModelsFromData } from "open-sse/services/combo.js";
-import { assertPublicUrl } from "@/shared/utils/ssrfGuard.js";
+import { assertPublicUrlResolved } from "@/shared/utils/ssrfGuard.js";
+
+// Empty page extraction is a provider result, not an unhealthy credential.
+function emptyExtractionResponse(result) {
+  return Response.json({ error: { type: "server_error", code: "EMPTY_EXTRACTION", message: result.error } }, {
+    status: 502, headers: { "Access-Control-Allow-Origin": "*" },
+  });
+}
 
 /**
  * Handle web fetch (URL extraction) request for the SSE/Next.js server.
@@ -79,9 +86,10 @@ export async function handleFetch(request) {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid URL format");
   }
 
-  // SSRF guard: reject internal/private/metadata targets
+  // SSRF guard: reject internal/private/metadata targets, including
+  // hostnames that merely resolve to one (DNS lookup, not just literal checks).
   try {
-    assertPublicUrl(targetUrl);
+    await assertPublicUrlResolved(targetUrl);
   } catch (err) {
     log.warn("FETCH", "Blocked URL", { url: targetUrl });
     return errorResponse(HTTP_STATUS.BAD_REQUEST, err.message);
@@ -95,15 +103,26 @@ export async function handleFetch(request) {
     const comboStrategy = comboStrategies[providerInput]?.fallbackStrategy || settings.comboStrategy || "fallback";
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
     log.info("FETCH", `Combo "${providerInput}" with ${comboModels.length} providers (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
-    return handleComboChat({
+    const attempts = [];
+    const response = await handleComboChat({
       body,
       models: comboModels,
-      handleSingleModel: (b, m) => handleSingleProviderFetch(b, m, request, apiKey, settings),
+      handleSingleModel: async (b, m) => {
+        const attemptIndex = attempts.push(undefined) - 1;
+        const response = await handleSingleProviderFetch(b, m, request, apiKey, settings);
+        const data = response.ok ? null : await response.clone().json().catch(() => null);
+        attempts[attemptIndex] = data?.error;
+        return response;
+      },
       log,
       comboName: providerInput,
       comboStrategy,
       comboStickyLimit
     });
+    if (!response.ok && attempts.length && attempts.every(error => error?.code === "EMPTY_EXTRACTION")) {
+      return emptyExtractionResponse({ error: "All fetch providers returned no usable extracted content" });
+    }
+    return response;
   }
 
   return handleSingleProviderFetch(body, providerInput, request, apiKey, settings);
@@ -150,6 +169,7 @@ async function handleSingleProviderFetch(body, providerInput, request, apiKey, s
         headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
       });
     }
+    if (result.code === "EMPTY_EXTRACTION") return emptyExtractionResponse(result);
     return errorResponse(result.status || HTTP_STATUS.BAD_GATEWAY, result.error || "Fetch failed");
   }
 
@@ -158,8 +178,13 @@ async function handleSingleProviderFetch(body, providerInput, request, apiKey, s
   let lastError = null;
   let lastStatus = null;
 
+  // Keep web-fetch failures scoped to this capability. Providers such as
+  // Ollama use the same connection for chat and fetch, so an upstream fetch
+  // failure must not take the account offline for LLM requests.
+  const fetchLockKey = `webfetch:${providerId}`;
+
   while (true) {
-    const credentials = await getProviderCredentials(providerId, excludeConnectionIds);
+    const credentials = await getProviderCredentials(providerId, excludeConnectionIds, fetchLockKey);
 
     if (!credentials || credentials.allRateLimited) {
       if (credentials?.allRateLimited) {
@@ -199,13 +224,21 @@ async function handleSingleProviderFetch(body, providerInput, request, apiKey, s
     });
 
     if (result.success) {
-      await clearAccountError(credentials.connectionId, credentials);
+      await clearAccountError(credentials.connectionId, credentials, fetchLockKey);
       return new Response(JSON.stringify(result.data), {
         headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
       });
     }
 
-    const { shouldFallback } = await markAccountUnavailable(credentials.connectionId, result.status, result.error, providerId);
+    if (result.code === "EMPTY_EXTRACTION") return emptyExtractionResponse(result);
+
+    const { shouldFallback } = await markAccountUnavailable(
+      credentials.connectionId,
+      result.status,
+      result.error,
+      providerId,
+      fetchLockKey,
+    );
 
     if (shouldFallback) {
       log.warn("AUTH", `Account ${credentials.connectionName} unavailable (${result.status}), trying fallback`);
